@@ -24,7 +24,7 @@ async function initializeDatabase() {
   }
 }
 
-// Conectar ao RabbitMQ
+// Conecta ao RabbitMQ
 const amqpConnect = promisify(amqp.connect);
 
 async function connectToRabbitMQ() {
@@ -44,7 +44,7 @@ async function connectToRabbitMQ() {
       const Compra = db.collection('compras'); 
       try {
         await Compra.insertOne({ id, nome, quantidade });
-        console.log(`Compra registrada: ${id} ${nome} ${quantidade}`);
+        console.log(`Compra registrada`);
       } catch (error) {
         console.error(`Erro ao registrar compra: ${error}`);
       }
@@ -61,19 +61,33 @@ async function connectToRabbitMQ() {
 app.post('/compra', async (req, res) => {
   const { id, quantidade } = req.body;
 
-  // Verificar se o produto com o ID existe no banco de dados
+  // Verifica se o produto com o ID existe no banco de dados
   const produtoExistente = await db.collection('produtos').findOne({ id: id });
 
   if (!produtoExistente) {
     return res.status(404).json({ mensagem: 'Produto com o ID não encontrado.' });
   }
 
-  // Envie uma mensagem para a fila do RabbitMQ
-  channel.sendToQueue('compraQueue', Buffer.from(JSON.stringify({ id, quantidade })));
-  res.status(200).json({ mensagem: 'Pedido de compra recebido com sucesso.' });
+  // Verifica se há quantidade suficiente em estoque
+  if (produtoExistente.quantidade < quantidade) {
+    return res.status(400).json({ mensagem: 'Produto indisponível. Quantidade em estoque insuficiente.' });
+  }
+
+  // Envia uma mensagem para a fila do RabbitMQ
+  try {
+    // Envie a resposta HTTP antes de enviar a mensagem para a fila
+    res.status(200).json({ mensagem: 'Pedido de compra recebido com sucesso.' });
+
+    // Agora, envie a mensagem para a fila do RabbitMQ
+    channel.sendToQueue('compraQueue', Buffer.from(JSON.stringify({ id, quantidade })));
+    console.log('Pedido de compra enviado para a fila.');
+  } catch (error) {
+    console.error('Erro ao enviar pedido de compra para a fila:', error);
+    return res.status(500).json({ mensagem: 'Erro interno ao processar a compra.' });
+  }
 });
 
-// Inicializar o servidor
+// Inicializa o servidor
 Promise.all([initializeDatabase(), connectToRabbitMQ()]).then(() => {
   app.listen(port, () => {
     console.log(`Microserviço de compra rodando em http://localhost:${port}/compra`);
